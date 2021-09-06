@@ -7,6 +7,7 @@ Created on Mon Sep  6 09:35:20 2021
 
 import pandas as pd
 import os
+#You should change it using the json file you downloaded from google
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"]="PATH TO JSON FILE"
 
 
@@ -49,5 +50,5 @@ query_job = client.query(query, job_config=safe_config)
 result = query_job.result()
 df = result.to_dataframe()
 
-#Save for future use as your are billed for each new query
+#Save for future use as you are billed for each new query
 df.to_csv("btc-balance060921.csv")
