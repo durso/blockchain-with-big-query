@@ -8,4 +8,4 @@ The second file (btc_balance_and_wallet_age.py) shows the balance along with the
 
 Plot produced by btc_balance_and_wallet_age.py
 
-![Histogram](https://github.com/durso/block-chain-with-big-query/blob/main/img/Hist_age.png?raw=true)
+![Histogram](https://github.com/durso/blockchain-with-big-query/blob/main/img/Hist_age.png?raw=true)
