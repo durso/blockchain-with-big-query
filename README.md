@@ -5,3 +5,7 @@ We are using Google Big Query to do some on-chain analysis. You could also run a
 We are staring with the file balance_btc.py that returns the balance of the top wallets.
 
 The second file (btc_balance_and_wallet_age.py) shows the balance along with the number of days since the first transaction (wallet age).
+
+Plot produced by btc_balance_and_wallet_age.py
+
+![Histogram](https://github.com/durso/block-chain-with-big-query/blob/main/img/Hist_age.png?raw=true)
