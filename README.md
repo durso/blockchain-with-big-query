@@ -10,7 +10,7 @@ Plot produced by btc_balance_and_wallet_age.py
 
 ![Histogram](https://github.com/durso/blockchain-with-big-query/blob/main/img/Hist_age.png?raw=true)
 
-The third file (wallet_cumbalance.py) shows the cumulative balance of a specific wallet. You can amend the WHERE clause to get the balance of a different wallet.
+The third file (wallet_cumbalance.py) shows the cumulative balance of a specific wallet (Binance cold wallet). You can amend the WHERE clause to get the balance of a different wallet.
 
 Plot produced by wallet_cumbalance.py
 
