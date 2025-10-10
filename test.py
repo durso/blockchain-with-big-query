@@ -1,3 +1,38 @@
+def scale_numeric_features(self, X, fit=False):
+    """
+    Scales only the numeric columns defined in self.schema["num_idx"].
+    - If fit=True, fits the scaler and then transforms.
+    - If fit=False, only transforms using the existing fitted scaler.
+    
+    Stores the scaler inside self.num_scaler.
+    
+    Parameters
+    ----------
+    X : np.ndarray
+        The input data matrix (already including one-hot/binary columns).
+    fit : bool
+        Whether to fit the scaler (typically True for training, False for inference).
+    
+    Returns
+    -------
+    X_scaled : np.ndarray
+        Copy of X with numeric columns scaled, others untouched.
+    """
+    if not hasattr(self, "num_scaler"):
+        self.num_scaler = StandardScaler()
+
+    X = np.asarray(X, dtype=np.float32, copy=True)
+
+    num_idx = self.schema.get("num_idx", [])
+    if len(num_idx) == 0:
+        return X  # nothing to scale
+
+    if fit:
+        self.num_scaler.fit(X[:, num_idx])
+
+    X[:, num_idx] = self.num_scaler.transform(X[:, num_idx]).astype(np.float32)
+    return X
+
 def _build_eval_masks(self, X_tensor):
     """Create masks for a full (N,D) tensor using self.schema."""
     schema = self.schema
