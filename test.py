@@ -1,84 +1,135 @@
-def scale_numeric_features(self, X, fit=False):
-    """
-    Scales only the numeric columns defined in self.schema["num_idx"].
-    - If fit=True, fits the scaler and then transforms.
-    - If fit=False, only transforms using the existing fitted scaler.
-    
-    Stores the scaler inside self.num_scaler.
-    
-    Parameters
-    ----------
-    X : np.ndarray
-        The input data matrix (already including one-hot/binary columns).
-    fit : bool
-        Whether to fit the scaler (typically True for training, False for inference).
-    
-    Returns
-    -------
-    X_scaled : np.ndarray
-        Copy of X with numeric columns scaled, others untouched.
-    """
-    if not hasattr(self, "num_scaler"):
-        self.num_scaler = StandardScaler()
+# --- SAS (Sinh–Arcsinh) — NLL block ---
 
-    X = np.asarray(X, dtype=np.float32, copy=True)
+if len(self.schema["sas_idx"]) > 0:
+    xi = x[:, self.schema["sas_idx"]]
 
-    num_idx = self.schema.get("num_idx", [])
-    if len(num_idx) == 0:
-        return X  # nothing to scale
+    sigma = F.softplus(outputs["sas_sigma"]) + eps      # >0
+    tail  = F.softplus(outputs["sas_tail"])  + eps      # >0 (tail-weight)
+    skew  = outputs["sas_skew"]                       
+    mu    = outputs["sas_mu"]                           # location; keep unconstrained
 
-    if fit:
-        self.num_scaler.fit(X[:, num_idx])
+    two_pi = torch.tensor(2.0 * torch.pi, dtype=xi.dtype, device=xi.device)
 
-    X[:, num_idx] = self.num_scaler.transform(X[:, num_idx]).astype(np.float32)
-    return X
+    w = (xi - mu) / (sigma + eps)
+    y = tail * torch.asinh(w) - skew
+    z = torch.sinh(y)
 
-def _build_eval_masks(self, X_tensor):
-    """Create masks for a full (N,D) tensor using self.schema."""
-    schema = self.schema
-    masks = {"num": None, "bin": None, "cat": []}
-    if schema.get("num_idx"):
-        masks["num"] = (~torch.isnan(X_tensor[:, schema["num_idx"]])).float()
-    if schema.get("bin_idx"):
-        masks["bin"] = (~torch.isnan(X_tensor[:, schema["bin_idx"]])).float()
-    for col in schema.get("cat", []):
-        idx = col["idx"]
-        oh = X_tensor[:, idx]
-        observed = (~torch.isnan(oh)).any(dim=1) & (oh.sum(dim=1) != 0)
-        masks["cat"].append(observed.float().unsqueeze(1))
-    return masks
+    log_pz = -0.5 * (z.pow(2) + torch.log(two_pi))
+    log_abs_det = (
+        torch.log(torch.cosh(y) + eps)
+        + torch.log(tail + eps)
+        - 0.5 * torch.log1p(w.pow(2))
+        - torch.log(sigma + eps)
+    )
+    log_sas = log_pz + log_abs_det
+    nll_sas = -log_sas
 
-def calculate_combined_score(self, X, labels, autoencoder=None):
-    model = autoencoder if autoencoder is not None else self.autoencoder
-    model.eval()
+    m = masks[:, self.schema["sas_idx"]] if masks is not None else None
+    per_dim, total = self.masked_mean_per_dim(nll_sas, m)
+    loss += total
+    breakdown["sas"] = {
+        "total": float(total.item()),
+        "per_dim_mean": per_dim.detach().cpu(),
+        "col_idx": self.schema["sas_idx"],
+    }
 
-    with torch.no_grad():
-        X_tensor = torch.as_tensor(X, dtype=torch.float32, device=self.device)
-        outputs, mu, logvar, z = model(X_tensor)
+# --- LogNormal — NLL block ---
 
-        # ---- reconstruction loss using tabular NLL ----
-        if isinstance(outputs, dict) and hasattr(self, "_tabular_nll_dict"):
-            masks = self._build_eval_masks(X_tensor)
-            recon_loss = self._tabular_nll_dict(outputs, X_tensor, self.schema, masks=masks)
-        elif hasattr(self, "feat_dists") and hasattr(self, "_tabular_nll_flat"):
-            # flat-parameter decoder path (no per-feature mask here; add if you maintain one)
-            recon_loss = self._tabular_nll_flat(outputs, X_tensor, self.feat_dists, imp_mask=None)
-        else:
-            # fallback (not ideal for tabular, but keeps backward compat)
-            recon_loss = torch.nn.functional.mse_loss(outputs, X_tensor, reduction="mean")
+if len(self.schema["lognorm_idx"]) > 0:
+    xi = x[:, self.schema["lognorm_idx"]]
 
-        # Bound into [0, 1) like your old 1/(1 + MSE)
-        reconstruction_score = 1.0 / (1.0 + recon_loss.item())
+    # Parameters of log X ~ Normal(mu, sigma^2)
+    mu     = outputs["lognorm_mu"]                    
+    sigma  = F.softplus(outputs["lognorm_sigma"]) + eps  # >0
 
-        gt_metrics = self.evaluate_against_ground_truth(X, labels)
+    # log p(x) = -log x - log sigma - 0.5*log(2π) - ((log x - mu)^2) / (2*sigma^2)
+    two_pi = torch.tensor(2.0 * torch.pi, dtype=xi.dtype, device=xi.device)
+    log_x  = torch.log(xi + eps)
+    quad   = (log_x - mu).pow(2) / (2.0 * sigma.pow(2))
 
-    if gt_metrics and self.labeled_indices is not None:
-        combined_score = (
-            0.05 * reconstruction_score
-            + 0.5 * gt_metrics.get("adjusted_rand_score", 0)
-            + 0.45 * gt_metrics.get("normalized_mutual_info_score", 0)
-        )
-    else:
-        combined_score = reconstruction_score
+    log_lognorm = -torch.log(xi + eps) - torch.log(sigma + eps) - 0.5 * torch.log(two_pi) - quad
+    nll_lognorm = -log_lognorm
 
-    return combined_score
+    m = masks[:, self.schema["lognorm_idx"]] if masks is not None else None
+    per_dim, total = self.masked_mean_per_dim(nll_lognorm, m)
+    loss += total
+    breakdown["lognorm"] = {
+        "total": float(total.item()),
+        "per_dim_mean": per_dim.detach().cpu(),
+        "col_idx": self.schema["lognorm_idx"],
+    }
+# --- Laplace (Double Exponential) — NLL block ---
+
+if len(self.schema["laplace_idx"]) > 0:
+    xi = x[:, self.schema["laplace_idx"]]
+
+    mu    = outputs["laplace_mu"]                    
+    b     = F.softplus(outputs["laplace_b"]) + eps        # scale > 0  (a.k.a. beta)
+
+    # log p(x) = -log(2b) - |x - mu| / b
+    log_laplace = -torch.log(2.0 * b) - torch.abs(xi - mu) / b
+    nll_laplace = -log_laplace
+
+    m = masks[:, self.schema["laplace_idx"]] if masks is not None else None
+    per_dim, total = self.masked_mean_per_dim(nll_laplace, m)
+    loss += total
+    breakdown["laplace"] = {
+        "total": float(total.item()),
+        "per_dim_mean": per_dim.detach().cpu(),
+        "col_idx": self.schema["laplace_idx"],
+    }
+
+
+
+
+
+
+# --- SAS (Sinh–Arcsinh) — sampling block (synthetic generation) ---
+
+# Params (same transforms as in NLL)
+sigma = F.softplus(outputs["sas_sigma"]) + eps
+tail  = F.softplus(outputs["sas_tail"])  + eps
+skew  = outputs["sas_skew"]
+mu    = outputs["sas_mu"]                 # or F.softplus(...) + eps 
+
+# Reparameterized sample:
+# z ~ N(0,1); y = asinh(z); u = (y + skew)/tail; w = sinh(u); x = mu + sigma*w
+z = torch.randn_like(mu)
+y = torch.asinh(z)
+u = (y + skew) / (tail + eps)
+w = torch.sinh(u)
+x_sas = mu + sigma * w
+
+
+x_syn[:, self.schema["sas_idx"]] = x_sas
+
+
+
+
+
+
+# --- LogNormal — sampling block (synthetic generation) ---
+
+mu    = outputs["lognorm_mu"]
+sigma = F.softplus(outputs["lognorm_sigma"]) + eps
+
+# Sample: y ~ Normal(mu, sigma^2), x = exp(y)
+z = torch.randn_like(mu)
+y = mu + sigma * z
+x_lognorm = torch.exp(y)
+
+x_syn[:, self.schema["lognorm_idx"]] = x_lognorm
+
+
+
+
+
+# --- Laplace (Double Exponential) — sampling block (synthetic generation) ---
+
+mu = outputs["laplace_mu"]
+b  = F.softplus(outputs["laplace_b"]) + eps
+
+u = torch.rand_like(mu) - 0.5
+x_laplace = mu - b * torch.sign(u) * torch.log1p(-2.0 * torch.abs(u) + eps)
+
+x_syn[:, self.schema["laplace_idx"]] = x_laplace
